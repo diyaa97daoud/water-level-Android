@@ -38,6 +38,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -73,6 +74,13 @@ fun DeviceDetailsScreen(deviceId: Long, deviceDetailsViewModel: DeviceDetailsVie
     // Load device details on first composition
     LaunchedEffect(deviceId) {
         deviceDetailsViewModel.loadDeviceDetails(deviceId)
+    }
+    
+    // Manage polling lifecycle - stop when leaving screen
+    DisposableEffect(deviceId) {
+        onDispose {
+            deviceDetailsViewModel.disconnectPolling(deviceId)
+        }
     }
 
     // Detect when user scrolls near the end
@@ -186,6 +194,47 @@ fun DeviceDetailsScreen(deviceId: Long, deviceDetailsViewModel: DeviceDetailsVie
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        
+                        // WebSocket Connection Status
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (uiState.isWebSocketConnected) 
+                                    Color(0xFF4CAF50).copy(alpha = 0.1f) 
+                                else 
+                                    Color(0xFFFF9800).copy(alpha = 0.1f)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (uiState.isWebSocketConnected) 
+                                                Color(0xFF4CAF50) 
+                                            else 
+                                                Color(0xFFFF9800)
+                                        )
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = if (uiState.isWebSocketConnected) 
+                                        "Real-time updates active" 
+                                    else 
+                                        "Connecting to real-time updates...",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                )
                             }
                         }
 
@@ -492,9 +541,20 @@ fun DeviceDetailsScreen(deviceId: Long, deviceDetailsViewModel: DeviceDetailsVie
 
 private fun formatTimestamp(timestamp: String): String {
     return try {
-        val zonedDateTime = ZonedDateTime.parse(timestamp)
+        // Try parsing as ZonedDateTime first
+        val zonedDateTime = try {
+            ZonedDateTime.parse(timestamp)
+        } catch (e: Exception) {
+            // If that fails, try LocalDateTime and add system timezone
+            java.time.LocalDateTime.parse(timestamp).atZone(java.time.ZoneId.systemDefault())
+        }
         zonedDateTime.format(DateTimeFormatter.ofPattern("MMM dd, yyyy HH:mm:ss"))
     } catch (e: Exception) {
-        timestamp
+        // Fallback: show first 19 characters (removes the T and milliseconds)
+        try {
+            timestamp.replace("T", " ").substring(0, 19)
+        } catch (e2: Exception) {
+            timestamp
+        }
     }
 }

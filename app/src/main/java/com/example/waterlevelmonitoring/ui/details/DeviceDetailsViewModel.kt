@@ -1,10 +1,13 @@
 package com.example.waterlevelmonitoring.ui.details
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.waterlevelmonitoring.data.model.DeviceResponse
 import com.example.waterlevelmonitoring.data.model.WaterLevelDataResponse
 import com.example.waterlevelmonitoring.data.repository.DeviceRepository
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,13 +28,65 @@ data class DeviceDetailsUiState(
     val maxThresholdError: String? = null,
     val successMessage: String? = null,
     val currentPage: Int = 0,
-    val hasMore: Boolean = true
+    val hasMore: Boolean = true,
+    val isWebSocketConnected: Boolean = false
 )
 
-class DeviceDetailsViewModel(private val deviceRepository: DeviceRepository) : ViewModel() {
+class DeviceDetailsViewModel(
+    private val deviceRepository: DeviceRepository
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DeviceDetailsUiState())
     val uiState: StateFlow<DeviceDetailsUiState> = _uiState.asStateFlow()
+    
+    private var pollingJob: Job? = null
+
+    // Poll for new data every 5 seconds
+    private fun startPolling(deviceId: Long) {
+        pollingJob?.cancel()
+        _uiState.value = _uiState.value.copy(isWebSocketConnected = true) // Show as "connected"
+        
+        pollingJob = viewModelScope.launch {
+            while (true) {
+                try {
+                    // Fetch latest water level data
+                    val latestData = deviceRepository.getWaterLevelData(deviceId, 0, 1)
+                    
+                    if (latestData.content.isNotEmpty()) {
+                        val newReading = latestData.content.first()
+                        val currentData = _uiState.value.waterLevelData
+                        
+                        // Only add if it's newer than the current top entry
+                        if (currentData.isEmpty() || newReading.id != currentData.first().id) {
+                            val updatedList = listOf(newReading) + currentData
+                            _uiState.value = _uiState.value.copy(
+                                waterLevelData = updatedList.take(50)
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("DeviceDetailsViewModel", "Polling error: ${e.message}")
+                }
+                
+                delay(5000) // Wait 5 seconds before next poll
+            }
+        }
+    }
+
+    private fun stopPolling() {
+        pollingJob?.cancel()
+        pollingJob = null
+        _uiState.value = _uiState.value.copy(isWebSocketConnected = false)
+    }
+
+    fun disconnectPolling(deviceId: Long) {
+        stopPolling()
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        stopPolling()
+    }
 
     fun loadDeviceDetails(deviceId: Long) {
         viewModelScope.launch {
@@ -78,6 +133,9 @@ class DeviceDetailsViewModel(private val deviceRepository: DeviceRepository) : V
                     currentPage = 0,
                     isLoading = false
                 )
+                
+                // Start polling for real-time updates instead of WebSocket
+                startPolling(deviceId)
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     error = "Failed to load device: ${e.message}",
